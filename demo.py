@@ -55,7 +55,7 @@ class Ref():
         # logging.debug("créé un referentiel. Inputs = %s"%(locals()))
 
         self.name = name
-        self.O = asarray(O)
+        self.O = np.array(O, dtype = float)
         self.psi = psi
         self.theta = theta
         self.phi = phi
@@ -68,13 +68,9 @@ class Ref():
         self.phi_n = copy.deepcopy(self.phi)
 
         self.depo = depo
-        if self.depo is not None and 'O' in self.depo : self.depo['O'] = np.asarray(self.depo['O'])
+        if self.depo is not None and 'O' in self.depo : self.depo['O'] = np.array(self.depo['O'],dtype = float)
 
-        # if depo is not None:
-        #     if 'O' in depo.keys(): self.O_d = depo['O']
-        #     if 'psi' in depo.keys(): self.psi_d = depo['psi']
-        #     if 'theta' in depo.keys(): self.theta_d = depo['theta']
-        #     if 'phi' in depo.keys(): self.phi_d = depo['phi']
+        self.depo_0 = copy.deepcopy(self.depo)
 
         self.calc_mat()
 
@@ -83,9 +79,24 @@ class Ref():
         # deuxième rotation d'angle theta autour de Y
         # troisième rotation d'angle phi autour de X
         self.mat = getMatRotx(self.phi)@getMatRoty(self.theta)@getMatRotx(self.psi)
+        self.Orig = np.zeros(self.O.shape)
+        # logging.debug("self.O %s" %self.O)
         if self.ref is not None:
-            self.O = self.ref.O + self.O
             self.mat = self.ref.mat@self.mat
+            self.Orig += self.ref.Orig
+        # logging.debug("shape of self.O %s ndim %s"%(self.O.shape,self.O.ndim))
+        # logging.debug('shape of self.mat %s ndim %s'%(self.mat.shape,self.mat.ndim))
+        if self.mat.ndim > 2 : #and self.O.ndim == 1:
+            # logging.debug("shape of self.O correc %s"%(np.expand_dims(self.O,self.O.ndim+1).transpose(0,2,1).shape,))
+            temp = (np.expand_dims(self.O,self.O.ndim+1).transpose(0,2,1)@self.mat)
+            # logging.debug("shape of temp %s"%(temp.shape,))
+            # logging.debug("temp %s"%(temp))
+            # logging.debug("shape of self.Orig %s"%(self.Orig,))
+            self.Orig  += temp[:,0,:]
+        else: 
+            self.Orig += self.O@self.mat
+        # logging.debug("self;Orig %s" %self.Orig)
+
 
     def getParams(self,params = None):
         if params is None: params = list()
@@ -96,9 +107,11 @@ class Ref():
             if 'theta' in self.depo.keys() and self.depo['theta'] != 0 : params.append(self.depo['theta'])
             if 'phi' in self.depo.keys() and self.depo['phi'] != 0 : params.append(self.depo['phi'])
         logging.debug("found %s parameters to optimize in ref %s"%(len(params)-len0,self.name))
+        self.nbrOfParameters = len(params)-len0
         return params
 
     def putParams(self, allParamsValues):
+        len0 = len(allParamsValues)
         self.O = copy.deepcopy(self.O_n)
         self.psi = copy.deepcopy(self.psi_n)
         self.theta = copy.deepcopy(self.theta_n)
@@ -106,18 +119,28 @@ class Ref():
         if self.depo is not None:
             if 'O' in self.depo.keys() : 
                 for i in range(3): 
-                    if self.depo['O'][i] != 0 : self.O[i] += allParamsValues.pop(0) 
-            if 'psi' in self.depo.keys() and self.depo['psi'] != 0 : self.psi = self.psi_n + allParamsValues.pop(0)
-            if 'theta' in self.depo.keys() and self.depo['theta'] != 0 : self.theta = self.theta_n + allParamsValues.pop(0)
-            if 'phi' in self.depo.keys() and self.depo['phi'] != 0 : self.phi = self.phi_n + allParamsValues.pop(0)
+                    if self.depo['O'][i] != 0 : 
+                        temp = allParamsValues.pop(0)
+                        # logging.debug('self.O[i] %s, temp %s'%(self.O[i], temp))
+                        self.O[i] = self.O[i] + temp 
+                        # logging.debug('insertion incertitude centrage %i dans %s: %s'%(i,self.name, temp))
+                        # logging.debug('self.O[i] %s'%(self.O[i]))
+            if 'psi' in self.depo.keys() and self.depo['psi'] != 0 : self.psi += allParamsValues.pop(0)
+            if 'theta' in self.depo.keys() and self.depo['theta'] != 0 : self.theta += allParamsValues.pop(0)
+            if 'phi' in self.depo.keys() and self.depo['phi'] != 0 : self.phi += allParamsValues.pop(0)
         self.calc_mat()
+        # logging.debug('nombre de parametres insérés dans %s: %s'%(self.name, len(allParamsValues)-len0))
+        if len0 - len(allParamsValues) != self.nbrOfParameters : raise(ValueError)
+        # logging.debug('self.o apres dispersion: %s'%(self.O))
         return allParamsValues
 
-    def nominalAgain(self):
+    def nominalAgain(self, incertAlso = False):
         self.O = copy.deepcopy(self.O_n)
         self.psi = copy.deepcopy(self.psi_n)
         self.theta = copy.deepcopy(self.theta_n)
         self.phi = copy.deepcopy(self.phi_n)
+        if incertAlso:
+            self.depo = copy.deepcopy(self.depo_0)
         self.calc_mat()
       
     def findRefs(self, refs= None):
@@ -134,18 +157,56 @@ class Ref():
         self.phi = np.ones(ntirages)*self.phi_n
         if self.depo is not None:
             if 'O' in self.depo.keys() : 
-                O = np.ones((ntirages,3))
+                O = np.zeros((ntirages,3))
                 for i in range(3):
                     O[:,i] = np.random.uniform(-self.depo['O'][i], self.depo['O'][i], ntirages)
                 self.O = self.O + O
             if 'psi' in self.depo.keys() : 
-                self.psi += np.random.uniform(self.depo['psi'], self.depo['psi'], ntirages)
+                self.psi += np.random.uniform(-self.depo['psi'], self.depo['psi'], ntirages)
             if 'theta' in self.depo.keys() : 
-                self.theta += np.random.uniform(self.depo['theta'], self.depo['theta'], ntirages)
+                self.theta += np.random.uniform(-self.depo['theta'], self.depo['theta'], ntirages)
             if 'phi' in self.depo.keys() : 
-                self.phi += np.random.uniform(self.depo['phi'], self.depo['phi'], ntirages)
+                self.phi += np.random.uniform(-self.depo['phi'], self.depo['phi'], ntirages)
 
         self.calc_mat()
+
+    def put_tirages(self, tirages):
+        ntirages = len(tirages[0])
+        len0 = len(tirages)
+        self.O = self.O_n * np.ones((ntirages,3))
+        self.psi = np.ones(ntirages)*self.psi_n
+        self.theta = np.ones(ntirages)*self.theta_n
+        self.phi = np.ones(ntirages)*self.phi_n
+        if self.depo is not None:
+            if 'O' in self.depo.keys() : 
+                O = np.zeros((ntirages,3))
+                for i in range(3):
+                    if self.depo['O'][i] !=0 : O[:,i] = tirages.pop(0)
+                self.O = self.O + O
+            if 'psi' in self.depo.keys() and self.depo['psi'] != 0 : 
+                self.psi += tirages.pop(0)
+            if 'theta' in self.depo.keys() and self.depo['theta'] != 0 : 
+                self.theta += tirages.pop(0)
+            if 'phi' in self.depo.keys() and self.depo['phi'] != 0 : 
+                self.phi += tirages.pop(0)
+
+        self.calc_mat()
+        if len0 - len(tirages) != self.nbrOfParameters : 
+            raise(ValueError("putted %s parames instead of %s in %s"%(len0 - len(tirages),self.nbrOfParameters, self.name)))
+
+    def neutraliseIncert(self):
+
+        if self.depo is not None:
+            # logging.debug('neutralise depo %s'%self.name)
+            if 'O' in self.depo.keys() : 
+                self.depo['O'] = np.zeros(3)
+            if 'psi' in self.depo.keys() : 
+                self.depo['psi'] = 0.
+            if 'theta' in self.depo.keys() : 
+                self.depo['theta'] = 0.
+            if 'phi' in self.depo.keys() : 
+                self.depo['phi'] = 0.
+        # logging.debug(self)   
 
 
     # def getMat(self):
@@ -166,6 +227,23 @@ class Element():
         self.garde = garde
         self.meco = meco
         self.disp = disp
+
+        def toFloat( incert):
+            if incert is not None:
+                if 'm' in incert.keys():
+                    incert['m'] = float(incert['m'])
+                if 'c' in incert.keys():
+                    incert['c'] = np.array(incert['c'], dtype = float)
+                if 'I' in incert.keys():
+                    incert['I'] = np.array(incert['I'], dtype = float)
+        toFloat(self.garde)
+        toFloat(self.meco)
+        toFloat(self.disp)
+
+
+        self.garde_0 = garde
+        self.meco_0 = meco
+        self.disp_0 = disp
         # if garde is not None:
         #     if 'm' in garde.keys(): self.m_g = garde['m']
         #     if 'c' in garde.keys(): self.c_g = garde['c']
@@ -180,20 +258,20 @@ class Element():
         #     if 'I' in disp.keys(): self.I_d = disp['I']
            
 
-    def toRef0(self):
+    def toRef0(self, GMD = False):
         if self.ref is not None:
-#            print("debug", type(self.ref.mat), selfa.ref.mat, self.c)
             #on etend self.c a une nouvelle dimension pour pouvoir traiter d'un coup les tirages.
             #la ligne d'origine:
-#            c = self.ref.O + self.ref.mat@self.c
-            c = self.ref.O + np.squeeze(self.ref.mat@np.expand_dims(self.c,self.c.ndim+1))
-            # print("debug2",c)
-            logging.debug("toRef0 : I shape = %s"%(self.I.shape,))
-            logging.debug("toRef0 : ref.mat shape = %s"%(self.ref.mat.shape,))
+            #c = self.ref.O + self.ref.mat@self.c
+            c = self.ref.Orig + np.squeeze(self.ref.mat@np.expand_dims(self.c,self.c.ndim+1))
+            # logging.debug("toRef0 : I shape = %s"%(self.I.shape,))
+            # logging.debug("toRef0 : ref.mat shape = %s"%(self.ref.mat.shape,))
             if self.I.ndim == 2:
                 I = self.ref.mat.T@self.I@self.ref.mat
             else:
-#                si on est en MTC,  il faut transposer uniquement les deux derniers axes au lieu de tt la matrice
+                # si on est en MTC,  il faut transposer uniquement les deux derniers axes au lieu de tt la matrice
+                # logging.debug("self.ref.mat shape %s"%(self.ref.mat.shape,))
+                # logging.debug("incert['I'] shape %s"%(self.I.shape,))
                 I = self.ref.mat.transpose(0,2,1)@self.I@self.ref.mat
             def toRefIncert(incert):
                 if incert is not None:
@@ -204,14 +282,20 @@ class Element():
                         if incert['I'].ndim == 2:
                             incertRef0['I'] = self.ref.mat.T@incert['I']@self.ref.mat
                         else:
-            #                si on est en MTC,  il faut transposer uniquement les deux derniers axes au lieu de tt la matrice
+                            # si on est en MTC,  il faut transposer uniquement les deux derniers axes au lieu de tt la matrice
+                            logging.debug("incert['I'] shape %s"%(incert['I'].shape,))
                             incertRef0['I'] = self.ref.mat.transpose(0,2,1)@incert['I']@self.ref.mat
                     return incertRef0
                 else:
                     return None
-            return Element(self.name, self.m, c, I, garde = toRefIncert(self.garde), 
-                                                    meco = toRefIncert(self.meco),
-                                                    disp = toRefIncert(self.disp))
+            if GMD :
+                return Element(self.name, self.m, c, I, garde = toRefIncert(self.garde_0), 
+                                                        meco = toRefIncert(self.meco_0),
+                                                        disp = toRefIncert(self.disp_0))
+            else:
+                return Element(self.name, self.m, c, I, garde = self.garde, 
+                                                        meco = self.meco,
+                                                        disp = self.disp)
         else:
             return self
         
@@ -220,46 +304,59 @@ class Element():
         if params is None: params = list()
         len0 = len(params)
         if self.garde is not None:
-            if 'm' in self.garde.keys(): params.append(self.garde['m'])
+            if 'm' in self.garde.keys() and self.garde['m'] != 0 : params.append(self.garde['m'])
             if 'c' in self.garde.keys(): params += [a for a in self.garde['c'] if a != 0]
             if 'I' in self.garde.keys(): params += [a for a in self.garde['I'].flatten() if a != 0]
-            if 'c' in self.garde.keys() :logging.debug("test %s"%(self.garde['c']))
+            # if 'c' in self.garde.keys() :logging.debug("test %s"%(self.garde['c']))
         if self.meco is not None:
-            if 'm' in self.meco.keys(): params.append(self.meco['m'])
+            if 'm' in self.meco.keys() and self.meco['m'] != 0 : params.append(self.meco['m'])
             if 'c' in self.meco.keys(): params += [a for a in self.meco['c'] if a != 0]
             if 'I' in self.meco.keys(): params += [a for a in self.meco['I'].flatten() if a != 0]
         if self.disp is not None:
-            if 'm' in self.disp.keys(): params.append(self.disp['m'])
+            if 'm' in self.disp.keys() and self.disp['m'] != 0 : params.append(self.disp['m'])
             if 'c' in self.disp.keys(): params += [a for a in self.disp['c'] if a != 0]
             if 'I' in self.disp.keys(): params += [a for a in self.disp['I'].flatten() if a != 0]
         logging.debug("found %s parameters to optimize in elemeny %s"%(len(params)-len0,self.name))
-
+        self.nbrOfParameters = len(params)-len0
         return params
 
     def putParams(self, allParamsValues):
         self.nominalAgain()
+        len0 = len(allParamsValues)
+        # logging.debug("reste %s parametres à distribuer"%len0)
         def putdisp(m, c, I, incert):
-            if 'm' in incert.keys(): m = m + allParamsValues.pop(0)
-            if 'c' in incert.keys():
-                for i in range(3):  
-                    if incert['c'][i] != 0 : c[i] = c[i] + allParamsValues.pop(0) 
-            if 'I' in incert.keys():
-                for i in range(3):
-                    for j in range(3):
-                        if incert['I'][i,j] != 0 :
-                            # temp = allParamsValues.pop(0) 
-                            I[i,j] = I[i,j] + allParamsValues.pop(0)
-                            # logging.debug("put inertie : %s, %s, %s"%(temp, i,j))
+            if incert is not None:
+                if 'm' in incert.keys() and incert['m'] != 0 : 
+                    m = m + allParamsValues.pop(0)
+                    # logging.debug("put masse in %s. incert linked: %s "%(self.name,incert['m']))
+                if 'c' in incert.keys():
+                    for i in range(3):  
+                        if incert['c'][i] != 0 : 
+                            c[i] = c[i] + allParamsValues.pop(0) 
+                            # logging.debug("put centrage in %s : i %s"%(self.name, i))
+                if 'I' in incert.keys():
+                    for i in range(3):
+                        for j in range(3):
+                            if incert['I'][i,j] != 0 :
+                                temp = allParamsValues.pop(0) 
+                                I[i,j] = I[i,j] + temp
+                                # logging.debug("put inertie in %s : %s, %s, %s"%(self.name,temp, i,j))
             return m,c,I
         self.m,self.c,self.I = putdisp(self.m,self.c,self.I,self.garde)
         self.m,self.c,self.I = putdisp(self.m,self.c,self.I,self.meco)
         self.m,self.c,self.I = putdisp(self.m,self.c,self.I,self.disp)
+        # logging.debug('nombre de parametre insérés : %s'%(len(allParamsValues)-len0))
+        if -len(allParamsValues)+len0 != self.nbrOfParameters : raise(ValueError)
         return allParamsValues
 
-    def nominalAgain(self):
+    def nominalAgain(self,incertAlso = False):
         self.m = copy.deepcopy(self.m_n)
         self.c = copy.deepcopy(self.c_n)
         self.I = copy.deepcopy(self.I_n)
+        if incertAlso:
+            self.garde = copy.deepcopy(self.garde_0)
+            self.meco = copy.deepcopy(self.meco_0)
+            self.disp = copy.deepcopy(self.disp_0)
 
         
 
@@ -278,12 +375,12 @@ class Element():
             if 'm' in self.garde.keys(): 
                 self.m += np.random.uniform(-self.garde['m'], self.garde['m'], ntirages)
             if 'c' in self.garde.keys(): 
-                c = np.ones((ntirages,3))
+                c = np.zeros((ntirages,3))
                 for i in range(3):
                     c[:,i] = np.random.uniform(-self.garde['c'][i], self.garde['c'][i], ntirages)
                 self.c += c
             if 'I' in self.garde.keys(): 
-                I = np.ones((ntirages,3,3))
+                I = np.zeros((ntirages,3,3))
                 for i in range(3):
                     for j in range(3):
                         I[:,i,j] = np.random.uniform(-self.garde['I'][i,j], self.garde['I'][i,j], ntirages)
@@ -292,12 +389,12 @@ class Element():
             if 'm' in self.meco.keys(): 
                 self.m += np.random.uniform(-self.meco['m'], self.meco['m'], ntirages)
             if 'c' in self.meco.keys(): 
-                c = np.ones((ntirages,3))
+                c = np.zeros((ntirages,3))
                 for i in range(3):
                     c[:,i] = np.random.uniform(-self.meco['c'][i], self.meco['c'][i], ntirages)
                 self.c += c
             if 'I' in self.meco.keys(): 
-                I = np.ones((ntirages,3,3))
+                I = np.zeros((ntirages,3,3))
                 for i in range(3):
                     for j in range(3):
                         I[:,i,j] = np.random.uniform(-self.meco['I'][i,j], self.meco['I'][i,j], ntirages)
@@ -306,17 +403,83 @@ class Element():
             if 'm' in self.disp.keys(): 
                 self.m += np.random.uniform(-self.disp['m'], self.disp['m'], ntirages)
             if 'c' in self.disp.keys():
-                c = np.ones((ntirages,3))
+                c = np.zeros((ntirages,3))
                 for i in range(3):
                     c[:,i] = np.random.uniform(-self.disp['c'][i], self.disp['c'][i], ntirages)
                 self.c += c
             if 'I' in self.disp.keys(): 
-                I = np.ones((ntirages,3,3))
+                I = np.zeros((ntirages,3,3))
                 for i in range(3):
                     for j in range(3):
                         I[:,i,j] = np.random.uniform(-self.disp['I'][i,j], self.disp['I'][i,j], ntirages)
                 self.I = self.I + I
         logging.debug("make tirage: shape of m,c I %s %s %s"%(self.m.shape,self.c.shape,self.I.shape))
+
+    def put_tirages(self, tirages):
+        #contrairement à make_tirage, cette fonction insere les valeurs déjà choisies pour chaque parametre
+        # elle est utilisé pour les optimisation, en permettant de calculer les dérivées en fonction de chaque entrée
+        # dans ce cas les différents tirage présentent un petit écart sur un des parametre pour calculer 
+        # le gradiant par différence fini.
+        # passer par cette fonction permet d'évaluer en une seule fois, l'ensemble des dérivées
+        ntirages = len(tirages[0])
+        len0 = len(tirages)
+        # logging.debug("len0 %s"%len0)
+        self.m = self.m_n * np.ones(ntirages)
+        self.c = self.c_n * np.ones((ntirages,3))
+        self.I = self.I_n * np.ones((ntirages,3,3))
+
+        def put_tirage_incert(incert):
+            if incert is not None :
+                if 'm' in incert.keys() and incert['m'] != 0: 
+                    self.m += tirages.pop(0)
+                if 'c' in incert.keys() : 
+                    c = np.zeros((ntirages,3))
+                    for i in range(3):
+                        if incert['c'][i] != 0 : c[:,i] = tirages.pop(0)
+                    self.c += c
+                if 'I' in incert.keys() : 
+                    I = np.zeros((ntirages,3,3))
+                    for i in range(3):
+                        for j in range(3):
+                            if incert['I'][i,j] != 0 : I[:,i,j] = tirages.pop(0)
+                    self.I = self.I + I
+        put_tirage_incert(self.garde)
+        # logging.debug("len0 %s"%(len0 - len(tirages)))
+        put_tirage_incert(self.meco)
+        # logging.debug("len0 %s"%(len0 - len(tirages)))
+        put_tirage_incert(self.disp)
+        # logging.debug("len0 %s"%(len0 - len(tirages)))
+        if -len(tirages)+len0 != self.nbrOfParameters : 
+            raise(ValueError("putted %s parames instead of %s in %s"%(len0 - len(tirages),self.nbrOfParameters, self.name)))
+
+        # logging.debug("put tirage: shape of m,c I %s %s %s"%(self.m.shape,self.c.shape,self.I.shape))
+
+
+    def neutraliseIncert(self, cara):
+        logging.debug("neutralise %s"%cara)
+        if cara == 'depo':
+            if self.ref is not None:
+                self.ref.neutraliseIncert()
+            return
+        if self.garde is not None:
+            if cara in self.garde.keys():
+                if cara == 'm':
+                    self.garde[cara] = 0
+                else :
+                    self.garde[cara][:] = 0
+        if self.meco is not None:
+            if cara in self.meco.keys():
+                if cara == 'm':
+                    self.meco[cara] = 0
+                else :
+                    self.meco[cara][:] = 0
+        if self.disp is not None:
+            if cara in self.disp.keys():
+                if cara == 'm':
+                    self.disp[cara] = 0
+                else :
+                    self.disp[cara][:] = 0
+
             
 
 class Ensemble():
@@ -339,10 +502,10 @@ class Ensemble():
         for e in self.elements:
             self.refs = e.findRefs(self.refs)
 
-    def toRef0(self):
+    def toRef0(self, GMD = False):
         # self.prepareRefs()
         
-        return [e.toRef0() for e in self.elements]
+        return [e.toRef0(GMD) for e in self.elements]
 
     def assemble(self):
 
@@ -351,15 +514,21 @@ class Ensemble():
         ms = array([e.m for e in elements])
         cs = array([e.c for e in elements])
         Is = array([e.I for e in elements])
-#        print("ms: ",ms.shape, ms)
-#        print("cs: ",cs.shape, cs)
-#        print("Is: ",Is.shape, Is)
+        if ms.ndim == 2:
+            ms = ms.transpose()
+            cs = cs.swapaxes(0,1)
+            Is = Is.swapaxes(0,1)
+        logging.debug("ms: %s"%(ms.shape,))
+        logging.debug("cs: %s"%(cs.shape,))
+        logging.debug("Is: %s"%(Is.shape,))
 
-        m = np.array(ms.sum(axis = 0))
+        m = np.array(ms.sum(axis = -1))
+        logging.debug('m.shape %s'%(m.shape,))
 #        c  = np.sum(ms*cs, axis = 0)/m
-        c  = np.sum((np.expand_dims(ms,ms.ndim+1)*cs), axis = 0)/np.expand_dims(m,m.ndim+1)
-#        print("c",c.shape,c)
-
+        logging.debug("np.sum((np.expand_dims(ms,ms.ndim+1)*cs), axis = -1) %s"%(np.sum((np.expand_dims(ms,ms.ndim+1)*cs), axis = -2).shape,))
+        c  = np.sum((np.expand_dims(ms,ms.ndim+1)*cs), axis = -2)/np.expand_dims(m,m.ndim+1)
+        logging.debug("c %s"%(c.shape,))
+        if c.ndim > 1: raise
         # calcul de I de façon itérative
         # I = 0.
         # for me,ce,Ie in zip(ms,cs,Is):
@@ -372,7 +541,8 @@ class Ensemble():
         #de facon matricielle
         #d = cs -c
         # en matriciel : d: dim1 = xyz ; dim2 = nelements ; dim3= ntirage
-        d = (cs - c)
+        d = (cs - np.expand_dims(c,c.ndim+1).swapaxes(-2,-1))
+        logging.debug("d %s"%(d.shape,))
         if d.ndim == 3 : d = d.swapaxes(0,-1).swapaxes(-2,-1)
         else: d = d.T
 #        print('d',d.shape, d)
@@ -400,41 +570,64 @@ class Ensemble():
         if not approxMethod :
             raise(NotImplementedError())
         else: #approx method
-            elements = self.toRef0()
-            logging.warning("ATTENTION : les gmd ne sont pas renvoyées vers ref0 pour l'instant...")
+            elements = self.toRef0(GMD = True)
 
-            cx_g_contribs,cy_g_contribs,cz_g_contribs = list(), list(), list()
-            Ixx_g_contribs,Iyy_g_contribs,Izz_g_contribs = list(), list(), list()
-            for e in elements:
-                logging.debug("%s garde : %s"%(e.name,e.garde))
-                if  e.garde is not None:
-                    if 'm' in e.garde.keys():  e_m_g = e.garde['m']
-                    else: e_m_g = 0
-                    if 'c' in e.garde.keys():  e_c_g = e.garde['c']
-                    else: e_c_g = np.zeros(3)
-                    if 'I' in e.garde.keys():  e_I_g = e.garde['I']
-                    else: e_I_g = np.zeros((3,3))
-                else:
-                    e_m_g = 0
-                    e_c_g = np.zeros(3)
-                    e_I_g = np.zeros((3,3))
+            def get_gmd(incert):
+                m_i_contribs = list()
+                cx_i_contribs,cy_i_contribs,cz_i_contribs = list(), list(), list()
+                Ixx_i_contribs,Iyy_i_contribs,Izz_i_contribs = list(), list(), list()
+                for e in elements:
+                    if incert == 'garde':
+                        incertitude = e.garde
+                    elif incert == 'meco':
+                        incertitude = e.meco
+                    elif incert == 'disp':
+                        incertitude = e.disp
+                    else:
+                        raise(ValueError)
+                    logging.debug("%s %s : %s"%(e.name,incert,incertitude))
+                    if  incertitude is not None:
+                        if 'm' in incertitude.keys():  e_m_i = incertitude['m']
+                        else: e_m_i = 0
+                        if 'c' in incertitude.keys():  e_c_i = incertitude['c']
+                        else: e_c_i = np.zeros(3)
+                        if 'I' in incertitude.keys():  e_I_i = incertitude['I']
+                        else: e_I_i = np.zeros((3,3))
+                    else:
+                        e_m_i = 0
+                        e_c_i = np.zeros(3)
+                        e_I_i = np.zeros((3,3))
 
-                logging.debug("garde m,g,I,%s,%s,%s"%(e_m_g,e_c_g,e_I_g))
-                cx_g_contribs.append(e_m_g*(e.c[0]-ce[0])/me + e.m*e_c_g[0]/me)
-                cy_g_contribs.append(e_m_g*(e.c[1]-ce[1])/me + e.m*e_c_g[1]/me)
-                cz_g_contribs.append(e_m_g*(e.c[2]-ce[2])/me + e.m*e_c_g[2]/me)
+                    logging.debug("garde m,c,I,%s,%s,%s"%(e_m_i,e_c_i,e_I_i))
+                    m_i_contribs.append(e_m_i)
+                    cx_i_contribs.append(e_m_i*(e.c[0]-ce[0])/me + e.m*e_c_i[0]/me)
+                    cy_i_contribs.append(e_m_i*(e.c[1]-ce[1])/me + e.m*e_c_i[1]/me)
+                    cz_i_contribs.append(e_m_i*(e.c[2]-ce[2])/me + e.m*e_c_i[2]/me)
 
-                Ixx_g_contribs.append(e_I_g[0,0] + e_m_g*(e.c[1]-ce[1])**2+e_m_g*(e.c[2]-ce[2])**2 +
-                                        e.m*(e.c[1]-ce[1])*e_c_g[1]+e.m*(e.c[2]-ce[2])*e_c_g[2])
-                Iyy_g_contribs.append(e_I_g[1,1] + e_m_g*(e.c[0]-ce[0])**2+e_m_g*(e.c[2]-ce[2])**2 +
-                                        e.m*(e.c[0]-ce[0])*e_c_g[0]+e.m*(e.c[2]-ce[2])*e_c_g[2])
-                Izz_g_contribs.append(e_I_g[2,2] + e_m_g*(e.c[0]-ce[0])**2+e_m_g*(e.c[1]-ce[1])**2 +
-                                        e.m*(e.c[0]-ce[0])*e_c_g[0]+e.m*(e.c[1]-ce[1])*e_c_g[1])
-            logging.debug("contribs cx %s \n cy %s \n cz %s\n Ixx %s \n Iyy %s \n czz %s"%( \
-                                    cx_g_contribs,cy_g_contribs,cz_g_contribs, \
-                                    Ixx_g_contribs,Iyy_g_contribs,Izz_g_contribs))
-            return np.asarray(cx_g_contribs).sum(), np.asarray(cy_g_contribs).sum(), np.asarray(cz_g_contribs).sum(), \
-                     np.asarray(Ixx_g_contribs).sum(), np.asarray(Iyy_g_contribs).sum(), np.asarray(Izz_g_contribs).sum()
+                    Ixx_i_contribs.append(e_I_i[0,0] + e_m_i*(e.c[1]-ce[1])**2+e_m_i*(e.c[2]-ce[2])**2 +
+                                            e.m*(e.c[1]-ce[1])*e_c_i[1]+e.m*(e.c[2]-ce[2])*e_c_i[2])
+                    Iyy_i_contribs.append(e_I_i[1,1] + e_m_i*(e.c[0]-ce[0])**2+e_m_i*(e.c[2]-ce[2])**2 +
+                                            e.m*(e.c[0]-ce[0])*e_c_i[0]+e.m*(e.c[2]-ce[2])*e_c_i[2])
+                    Izz_i_contribs.append(e_I_i[2,2] + e_m_i*(e.c[0]-ce[0])**2+e_m_i*(e.c[1]-ce[1])**2 +
+                                            e.m*(e.c[0]-ce[0])*e_c_i[0]+e.m*(e.c[1]-ce[1])*e_c_i[1])
+                logging.debug("contribs cx %s \n cy %s \n cz %s\n Ixx %s \n Iyy %s \n czz %s"%( \
+                                        cx_i_contribs,cy_i_contribs,cz_i_contribs, \
+                                        Ixx_i_contribs,Iyy_i_contribs,Izz_i_contribs))
+                
+                m_i = np.asarray(m_i_contribs).sum()
+                c_i = np.array([np.asarray(cx_i_contribs).sum(), np.asarray(cy_i_contribs).sum(), np.asarray(cz_i_contribs).sum()])
+                Ixx_i, Iyy_i, Izz_i = np.asarray(Ixx_i_contribs).sum(), np.asarray(Iyy_i_contribs).sum(), np.asarray(Izz_i_contribs).sum()
+                I_i = np.array([[Ixx_i,0,0],
+                                [0,Iyy_i,0],
+                                [0,0,Izz_i]])
+                return dict(m=m_i,c=c_i,I=I_i)
+
+            garde = get_gmd(incert='garde')
+            meco = get_gmd(incert='meco')
+            disp = get_gmd(incert='disp')
+            return Element('res',me,ce,Ie, garde = garde, meco = meco, disp = disp)
+            # return np.asarray(cx_g_contribs).sum(), np.asarray(cy_g_contribs).sum(), np.asarray(cz_g_contribs).sum(), \
+            #          np.asarray(Ixx_g_contribs).sum(), np.asarray(Iyy_g_contribs).sum(), np.asarray(Izz_g_contribs).sum()
 
 
 
@@ -448,21 +641,24 @@ class Ensemble():
     def dispers(self, allParamsValues):
         if isinstance(allParamsValues, np.ndarray): allParamsValues = allParamsValues.tolist()
         for e in self.elements:
+            # logging.debug("disperse %s "%(e.name))
             allParamsValues = e.putParams(allParamsValues)
         for ref in self.refs:
             allParamsValues = ref.putParams(allParamsValues)
         if len(allParamsValues) != 0 : raise(ValueError)
     
-    def nominalAgain(self):
+    def nominalAgain(self,incertAlso = False):
         for e in self.elements:
-            e.nominalAgain()
+            e.nominalAgain(incertAlso)
         for ref in self.refs:
-            ref.nominalAgain()
+            ref.nominalAgain(incertAlso)
 
     def optimize(self, objective = 'cr_max'):
         logging.debug("lancement d'une optimisation : %s"%(objective))
 
         self.findRefs()
+        self.nominalAgain()
+        logging.debug('%s référentiels différents trouvés'%len(self.refs))
         self.find_parameters()
         # self.dispersed = copy.deepcopy(self)
 
@@ -489,43 +685,151 @@ class Ensemble():
         logging.debug("bornes utilisées pour l'optimisation : %s"%(bounds))
 
         
+        def getObjectiveValue(m,c,I):
+            if c.ndim == 1:
+                #alors on a un seul point de calcul.
+                # pour rendre cette fonction compatible de plusieurs points de calculs
+                # on ajoute une dimension devant, pour simuler un résultat sur plusieurs points, avec un seul point
+                m = np.ones(1)*m
+                c = np.expand_dims(c,2).transpose()
+                I = np.expand_dims(I,3).transpose(2,0,1)
+
+            if objective == 'cr_max':
+                res =  -np.sqrt(c[:,1]**2+c[:,2]**2)
+            elif objective == 'cr_min':
+                res =  np.sqrt(c[:,1]**2+c[:,2]**2)
+            elif objective == 'cx_max':
+                res =  -c[:,0]
+            elif objective == 'cx_min':
+                res =  c[:,0]
+            elif objective == 'cy_max':
+                res =  -c[:,1]
+            elif objective == 'cy_min':
+                res =  c[:,1]
+            elif objective == 'cz_max':
+                res =  -c[:,2]
+            elif objective == 'cz_min':
+                res =  c[:,2]
+            elif objective == 'Ixx_max':
+                res =  -I[:,0,0]
+            elif objective == 'Ixx_min':
+                res =  I[:,0,0]
+            elif objective == 'Iyy_max':
+                res =  -I[:,1,1]
+            elif objective == 'Iyy_min':
+                res =  I[:,1,1]
+            elif objective == 'Izz_max':
+                res =  -I[:,2,2]
+            elif objective == 'Izz_min':
+                res =  I[:,2,2]
+            elif objective == 'Ixy_max':
+                res =  -I[:,0,1]
+            elif objective == 'Ixy_min':
+                res =  I[:,0,1]
+            elif objective == 'Ixz_max':
+                res =  -I[:,0,2]
+            elif objective == 'Ixz_min':
+                res =  I[:,0,2]
+            elif objective == 'Iyz_max':
+                res =  -I[:,1,2]
+            elif objective == 'Iyz_min':
+                res =  I[:,1,2]
+            elif objective == 'm_min':
+                res =  m[:] 
+            elif objective == 'm_max':
+                res =  -m[:]
+            else:
+                raise(ValueError)
+
+            # logging.debug("res %s, %s"%(res,c.shape[0]))
+            if c.shape[0] == 1 :
+                # on ne veut pas un tableau en sortie mais jsute un float
+                return res[0] 
+            else:
+                return res
+
+
+
+
         def costFunction(dispersedParams):
-            logging.debug("dispersion avec ces parametres : %s"%dispersedParams[:3])
+            # logging.debug("dispersion avec ces parametres : %s"%dispersedParams)
             self.dispers(dispersedParams)
             # logging.debug("Inertie : %s"%(self.elements[0].I))
             m,c,I = self.assemble()
-            logging.debug("resultat : %s %s %s"%(m,c,I))
+            # logging.debug("resultat : %s %s %s"%(m,c,I))
 
-            if objective == 'cr_max':
-                return -np.sqrt(c[1]**2+c[2]**2)
-            elif objective == 'cr_min':
-                return np.sqrt(c[1]**2+c[2]**2)
-            elif objective == 'cx_max':
-                return -c[0]
-            elif objective == 'cx_min':
-                return c[0]
-            elif objective == 'cy_max':
-                return -c[1]
-            elif objective == 'cy_min':
-                return c[1]
-            elif objective == 'cz_max':
-                return -c[2]
-            elif objective == 'cz_min':
-                return c[2]
-            elif objective == 'Ixx_max':
-                return -I[0,0]
-            elif objective == 'Ixx_min':
-                return I[0,0]
-            elif objective == 'Iyy_max':
-                return -I[1,1]
-            elif objective == 'Iyy_min':
-                return I[1,1]
-            elif objective == 'Izz_max':
-                return -I[2,2]
-            elif objective == 'Izz_min':
-                return I[2,2]
-            else:
-                raise(ValueError)
+            return getObjectiveValue(m,c,I)
+
+        def testgradiantFunction(dispersedParams):
+            epsilon = 1e-8
+            ref = costFunction(dispersedParams)
+            logging.debug("ref %s"%ref)
+
+            grad = list()
+            for i, param in enumerate(dispersedParams):
+                dispP = copy.deepcopy(dispersedParams)
+                dispP[i] += epsilon
+                grad.append((costFunction(dispP)-ref)/epsilon)
+            logging.debug("grad %s"%grad)
+            return np.array(grad)
+
+        def gradiantFunction(dispersedParams):
+            gradtest = testgradiantFunction(dispersedParams)
+            # calcule la dérivée par différence finie sur l'ensemble des parametres
+            epsilon = 1e-8
+
+            self.nominalAgain()
+            paramForGrad = list()
+            for i,param in enumerate(dispersedParams):
+                paramForGrad.append(param + np.zeros(len(dispersedParams)))
+                # paramForGrad[-1][i] += -epsilon
+                # paramForGrad[-1][i] += -(params_max[i]-params_min[i])*epsilon
+            # logging.debug("jeu de parametre pour gradiant shape: %s %s"%(len(paramForGrad),paramForGrad[0].shape))
+            # logging.debug("jeu de parametre pour gradiant : %s"%(paramForGrad[:2]))
+            logging.debug("objective %s"%(objective))
+            logging.debug("ecart entre dispersedParam et paramForGrad %s"%(np.array(dispersedParams)-np.array(paramForGrad)[:,0]))
+
+            for element in self.elements:
+                element.put_tirages(paramForGrad)
+            for ref in self.refs:
+                ref.put_tirages(paramForGrad)
+            if len(paramForGrad) != 0 : raise(ValueError)
+            nom_m, nom_c, nom_I = self.assemble()
+            nom_objectiv = getObjectiveValue(nom_m, nom_c, nom_I)
+            logging.debug("nom_objectiv %s"%nom_objectiv)
+            logging.debug("devrait être egal à %s"%costFunction(dispersedParams))
+
+            self.nominalAgain()
+            paramForGrad = list()
+            for i,param in enumerate(dispersedParams):
+                paramForGrad.append(param + np.zeros(len(dispersedParams)))
+                paramForGrad[-1][i] += epsilon
+                # paramForGrad[-1][i] += (params_max[i]-params_min[i])*epsilon
+            # logging.debug("jeu de parametre pour gradiant shape: %s %s"%(len(paramForGrad),paramForGrad[0].shape))
+            # logging.debug("jeu de parametre pour gradiant : %s"%(paramForGrad[:2]))
+
+            for element in self.elements:
+                element.put_tirages(paramForGrad)
+            for ref in self.refs:
+                ref.put_tirages(paramForGrad)
+            if len(paramForGrad) != 0 : raise(ValueError)
+            
+            grad_m,grad_c,grad_I = self.assemble()
+            grad_objectiv = getObjectiveValue(grad_m,grad_c,grad_I)
+
+            # grad = (grad_objectiv - nom_objectiv)/(2*epsilon)
+            grad = (grad_objectiv - nom_objectiv)/(epsilon)
+            logging.debug("idem en rapide %s"%grad)
+            logging.debug("diff %s"%(grad-gradtest))
+
+            return grad
+            # return (grad_objectiv - nom_objectiv)/(epsilon)
+
+
+            
+
+
+
         
         def callback(dispersedParams):
             self.dispers(dispersedParams)
@@ -544,16 +848,28 @@ class Ensemble():
                 logging.info(I[1,1])
             elif 'Izz_' in objective:
                 logging.info(I[2,2])
+            elif 'Ixy_' in objective:
+                logging.info(I[0,1])
+            elif 'Ixz_' in objective:
+                logging.info(I[0,2])
+            elif 'Iyz_' in objective:
+                logging.info(I[1,2])
+            elif 'm_' in objective:
+                logging.info(m)
             else:
                 raise(ValueError)
             
         
-        res = minimize(fun = costFunction, x0 = params_nom, bounds = bounds, callback = callback)#, method = 'TNC')
+        # res = minimize(fun = costFunction, x0 = params_nom, bounds = bounds, callback = callback, method = 'TNC')
+        res = minimize(fun = costFunction, jac = gradiantFunction, x0 = params_nom, bounds = bounds, callback = callback, method = 'L-BFGS-B')
+        # res = minimize(fun = costFunction, jac = testgradiantFunction, x0 = params_nom, bounds = bounds, callback = callback, method = 'L-BFGS-B')
+        # res = minimize(fun = costFunction, jac = gradiantFunction, x0 = params_nom, bounds = bounds, callback = callback, method = 'TNC')
+        # res = minimize(fun = costFunction, x0 = params_nom, bounds = bounds, callback = callback, method = 'L-BFGS-B')
         # res = minimize(fun = costFunction, x0 = params_nom, bounds = bounds, callback = None)
         logging.debug(res)
         self.nominalAgain()
         if res['success'] is not True :
-            raise(ValueError("l'optimisation n'a pas abouti"))
+            raise(ValueError("l'optimisation n'a pas abouti sur ce parametre: %s"%objective))
         if 'max' in objective :
             logging.info("%s = %s"%(objective, -res['fun']))
             return -res['fun']
@@ -563,22 +879,49 @@ class Ensemble():
         else :
             raise(ValueError)
         
-    def bornesByOptimization(self):
+    def bornesByOptimization(self, only = None):
         m,c,I = self.assemble()
-        c_min = [self.optimize(objective = obj) for obj in ['cx_min', 'cy_min', 'cz_min']]
-        c_max = [self.optimize(objective = obj) for obj in ['cx_max', 'cy_max', 'cz_max']]
-        I_min = [self.optimize(objective = obj) for obj in ['Ixx_min', 'Iyy_min', 'Izz_min']]
-        I_max = [self.optimize(objective = obj) for obj in ['Ixx_max', 'Iyy_max', 'Izz_max']]
-        logging.debug('c_min %s'%c_min)
+        res = dict()
+        if only is None or only == "min":
+            m_min = self.optimize(objective = 'm_min') 
+            c_min = np.array([self.optimize(objective = obj) for obj in ['cx_min', 'cy_min', 'cz_min']])
+            I_min = np.array([[self.optimize(objective = 'Ixx_min'),self.optimize(objective = 'Ixy_min'),self.optimize(objective = 'Ixz_min')],
+                     [0, self.optimize(objective = 'Iyy_min'),self.optimize(objective = 'Iyz_min')],
+                     [0,0,self.optimize(objective = 'Izz_min')]])
+            I_min[1,0]=I_min[0,1]
+            I_min[2,0]=I_min[0,2]
+            I_min[2,1]=I_min[1,2]
+            logging.debug('c_min %s'%c_min)
+            logging.debug('I_min %s'%I_min)
+            res["mmin"] = m_min
+            res["cmin"] = c_min
+            res["Imin"] = I_min
+        
         logging.debug('c     %s'%c)
-        logging.debug('c_max %s'%c_max)
-        logging.debug('I_min %s'%I_min)
         logging.debug('I     %s'%I)
-        logging.debug('I_max %s'%I_max)
+
+        if only is None or only == "max":
+            m_max = self.optimize(objective = 'm_max') 
+            c_max = np.array([self.optimize(objective = obj) for obj in ['cx_max', 'cy_max', 'cz_max']])
+            I_max = np.array([[self.optimize(objective = 'Ixx_max'),self.optimize(objective = 'Ixy_max'),self.optimize(objective = 'Ixz_max')],
+                     [0, self.optimize(objective = 'Iyy_max'),self.optimize(objective = 'Iyz_max')],
+                     [0,0,self.optimize(objective = 'Izz_max')]])
+            I_max[1,0]=I_max[0,1]
+            I_max[2,0]=I_max[0,2]
+            I_max[2,1]=I_max[1,2]
+            res["mmax"] = m_max
+            res["cmax"] = c_max
+            res["Imax"] = I_max
+            logging.debug('c_max %s'%c_max)
+            logging.debug('I_max %s'%I_max)
+ 
+        return res
 
     def MTC(self, ntirages = 10):
         
         # self.MTC = copy.deepcopy(self)
+        self.findRefs()
+
         logging.info("start MTC")
         for e in self.elements:
             logging.info("make tirage element %s"%e.name)
@@ -588,6 +931,7 @@ class Ensemble():
             ref.make_tirages(ntirages)
         
         m,c,i = self.assemble()
+        logging.debug('nombre de tirage de m: %s'%m.shape)
 
         self.nominalAgain()
         return m,c,i
@@ -615,8 +959,8 @@ if __name__ == "__main__":
     #                                                              [0,0,1]]), ref = None)
     
     
-    ref1 = Ref(name = 'ref1', O = [10.,0.,2.], psi = 150., theta = 10., phi = 0., depo = dict(O=[1,1,1] ,
-                                                                            psi=1))
+    ref1 = Ref(name = 'ref1', O = [10.,0.,2.], psi = 150., theta = 0., phi = 0., depo = dict(O=[1,1,1] ,
+                                                                                           psi=1))
     e1 = Element(name = 'e2', m = 1., c = array([1,2,3]), I = array([[1,0,0],
                                                         [0,1,0],
                                                         [0,0,1]]), ref = ref1,
@@ -626,13 +970,15 @@ if __name__ == "__main__":
     
     print('#######  bornes by optimization #########')
     ensemble.bornesByOptimization()
+    # ensemble = Ensemble(e1)
+    # ensemble.optimize('cx_max')
+
     
-    
-    print('#######  MTC #########')
-    m,c,I = ensemble.MTC(ntirages = 50000)
-    print('m ',m.shape,m)
-    print('c ',c.shape, c)
-    print('I ',I.shape, I)
+    # print('#######  MTC #########')
+    # m,c,I = ensemble.MTC(ntirages = 50000)
+    # print('m ',m.shape,m)
+    # print('c ',c.shape, c)
+    # print('I ',I.shape, I)
     
     
     # for i in range(50000):
